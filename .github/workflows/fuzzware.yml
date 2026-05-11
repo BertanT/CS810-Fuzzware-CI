@@ -1,0 +1,122 @@
+name: Fuzzware
+
+env:
+  FUZZWARE_VENV: /home/bertan/.virtualenvs/fuzzware/bin/activate
+
+on:
+  workflow_dispatch:
+    inputs:
+      fuzz_duration:
+        description: 'Fuzz duration (hh:mm:ss)'
+        required: false
+        default: '00:05:00'
+  pull_request:
+
+jobs:
+  fuzz:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure duration
+        id: duration
+        run: |
+          DURATION="${{ github.event.inputs.fuzz_duration }}"
+          if [ -z "$DURATION" ]; then
+            DURATION="${{ vars.FUZZ_DURATION }}"
+          fi
+          if [ -z "$DURATION" ]; then
+            DURATION="00:05:00"
+          fi
+          echo "duration=$DURATION" >> $GITHUB_OUTPUT
+
+      - name: Fuzz
+        run: |
+          source $FUZZWARE_VENV
+          fuzzware pipeline \
+            --skip-afl-cpufreq \
+            --run-for ${{ steps.duration.outputs.duration }} \
+            fuzzbin/
+
+      - name: Export stats
+        run: |
+          source $FUZZWARE_VENV
+          cd fuzzbin
+          fuzzware genstats coverage
+          fuzzware genstats crashcontexts
+
+      - name: Collect PR comment data
+        if: github.event_name == 'pull_request'
+        id: stats
+        run: |
+          cd fuzzbin
+
+          CRASH_COUNT=$(ls fuzzware-project/main*/fuzzers/fuzzer*/crashes/id* 2>/dev/null | wc -l)
+          echo "crash_count=$CRASH_COUNT" >> $GITHUB_OUTPUT
+
+          BB_COUNT=$(tail -1 fuzzware-project/stats/covered_bbs_by_second_into_experiment.csv | awk -F'\t' '{print $2}')
+          echo "bb_count=$BB_COUNT" >> $GITHUB_OUTPUT
+
+          MAX_CRASH_CONTEXTS="${{ vars.MAX_CRASH_CONTEXTS }}"
+          if [ -z "$MAX_CRASH_CONTEXTS" ]; then
+            MAX_CRASH_CONTEXTS=20
+          fi
+
+          if [ "$CRASH_COUNT" -gt 0 ] && [ -f fuzzware-project/stats/crash_contexts.txt ]; then
+            CRASH_CTX=$(grep -v '^#' fuzzware-project/stats/crash_contexts.txt | head -$MAX_CRASH_CONTEXTS)
+          else
+            CRASH_CTX="No crashes found."
+          fi
+          echo "crash_contexts<<EOF" >> $GITHUB_OUTPUT
+          echo "$CRASH_CTX" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const duration = '${{ steps.duration.outputs.duration }}';
+            const crashCount = parseInt('${{ steps.stats.outputs.crash_count }}');
+            const bbCount = '${{ steps.stats.outputs.bb_count }}';
+            const crashContexts = `${{ steps.stats.outputs.crash_contexts }}`;
+            const maxCrashContexts = '${{ vars.MAX_CRASH_CONTEXTS }}' || 20;
+            const runUrl = `https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+
+            const body = [
+              '## Fuzzware Analysis Report',
+              'Hi! We finsihed your Fuzzware run. Below is an overview.',
+              '',
+              `**Duration (hh:mm:ss):** ${duration}`,
+              `**Basic blocks covered:** ${bbCount}`,
+              `**Crashes found:** ${crashCount}`,
+              '',
+              `### Crash Contexts (Last ${maxCrashContexts})`,
+              '```',
+              crashContexts,
+              '```',
+              '',
+              `**Download your Fuzzware Project for local analysis here:** [Run #${{ github.run_id }}](${runUrl})`,
+              '',
+              'Have a nice day :)'
+            ].join('\n');
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });
+
+      - name: Compress output
+        if: always()
+        run: zip -r fuzzware-project.zip fuzzbin/fuzzware-project/
+
+      - name: Upload output as artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fuzzware-project-${{ github.run_id }}
+          path: fuzzware-project.zip
+          retention-days: ${{ vars.ARTIFACT_RETENTION_DAYS || 7 }}
