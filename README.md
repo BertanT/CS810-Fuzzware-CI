@@ -9,8 +9,6 @@ The demo of the Fuzzware CI project I made for my CS810 Final Class Project.
 For demonstration purposes, there are two dummy PRs that have had a fuzzing time of 10 minuted and 2 hours. The CI Action has added comments in each one summarizing the fuzzing results. They also include a link to download the zipped Fuzzware Project that you can download and inspect on your own machine.
 
 ## Trying It Out For Yourself!
-I have set the FUZZ_DURATION to 2 mintues so you can quickly try out my project! 
-
 Please make a dummy pull request to this repository. This could consist of an edit to this `README.md` file, or just adding a new file. Please do no modify anything under `fuzzbin/` or `.github`.
 
 This should automatically trigget the Fuzzer action as a status check. Once the fuzzer is done, you should see a comment similar to the other pull requests get added. Again, you can use the link to download your fuzzware project to keep workign on it on your local machine. The project you download will contain plaintext/csv statistics at `fuzzware-project/stats/` that doesn't require Fuzzware on your local machine to study. If you have Fuzzware set up on your machine already, you should be able to replay runs too.
